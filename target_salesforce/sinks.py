@@ -5,7 +5,7 @@ from dataclasses import asdict
 
 
 from singer_sdk.sinks import BatchSink
-from simple_salesforce import Salesforce, bulk, exceptions
+from simple_salesforce import Salesforce, bulk, bulk2, exceptions
 from target_salesforce.session_credentials import parse_credentials, SalesforceAuth
 from target_salesforce.utils.exceptions import InvalidStreamSchema, SalesforceApiError
 from singer_sdk.plugin_base import PluginBase
@@ -41,6 +41,10 @@ class SalesforceSink(BatchSink):
         if self._sf_client:
             return self._sf_client
         return self._new_session()
+
+    @property
+    def mdapi(self):
+        return self.sf_client().mdapi
 
     @property
     def object_fields(self) -> Dict[str, ObjectField]:
@@ -91,8 +95,15 @@ class SalesforceSink(BatchSink):
 
     def process_batch(self, context: dict) -> None:
         """Write out any prepped records and return once fully written."""
+        bulk_api_version = self.config("bulk_api_version", 1)
+        self.logger.info(f"Bulk API Version: {bulk_api_version}")
 
-        sf_object: bulk.SFBulkType = getattr(self.sf_client.bulk, self.stream_name)
+        if bulk_api_version == 1:
+            sf_object: bulk.SFBulkType = getattr(self.sf_client.bulk, self.stream_name)
+        elif bulk_api_version == 2:
+            sf_object: bulk2.SFBulk2Type = getattr(self.sf_client.bulk2, self.stream_name)
+        else:
+            raise Exception("Invalid Bulk API version")
 
         results = self._process_batch_by_action(
             sf_object, self.config.get("action"), self._batched_records
@@ -105,7 +116,7 @@ class SalesforceSink(BatchSink):
         # Refresh session to avoid timeouts.
         self._new_session()
 
-    def _process_batch_by_action(
+    def _process_batch_by_action_v1(
         self, sf_object: bulk.SFBulkType, action, batched_data
     ):
         """Handle upsert records different method"""
@@ -125,10 +136,52 @@ class SalesforceSink(BatchSink):
 
         return results
 
+    def _process_batch_by_action_v2(
+        self,
+        sf_object: bulk2.SFBulk2Type,
+        action,
+        batched_data,
+    ):
+        """Handle upsert records different method"""
+
+        sf_object_action = getattr(sf_object, action)
+
+        self.logger.info("SF Object type: " + str(type(sf_object)))
+        try:
+            if action == "upsert":
+                external_id_field = self.config.get("external_id_field")
+                if not external_id_field:
+                    raise Exception("external_id_field config value must be set when upserting.")
+                results = sf_object_action(records=batched_data, external_id_field=external_id_field)
+            else:
+                results = sf_object_action(records=batched_data)
+        except exceptions.SalesforceMalformedRequest as e:
+            self.logger.error(
+                f"Data in {action} {self.stream_name} batch does not conform to target SF {self.stream_name} Object"
+            )
+            raise (e)
+
+        return results
+
+    def _process_batch_by_action(
+        self,
+        sf_object,
+        action,
+        batched_data,
+    ):
+        """Handle upsert records different method"""
+        bulk_api_version = self.config("bulk_api_version", 1)
+        if bulk_api_version == 1:
+            return self._process_batch_by_action_v1(sf_object, action, batched_data)
+        if bulk_api_version == 2:
+            return self._process_batch_by_action_v2(sf_object, action, batched_data)
+        raise Exception("Invalid Bulk API version")
+
     def _validate_batch_result(self, results: List[Dict], action, batched_records):
         records_failed = 0
         records_processed = 0
 
+        self.logger.info(str(results))
         for i, result in enumerate(results):
             if result.get("success"):
                 records_processed += 1
