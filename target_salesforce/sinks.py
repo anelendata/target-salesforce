@@ -95,7 +95,7 @@ class SalesforceSink(BatchSink):
 
     def process_batch(self, context: dict) -> None:
         """Write out any prepped records and return once fully written."""
-        bulk_api_version = self.config("bulk_api_version", 1)
+        bulk_api_version = self.config.get("bulk_api_version", 1)
         self.logger.info(f"Bulk API Version: {bulk_api_version}")
 
         if bulk_api_version == 1:
@@ -109,9 +109,16 @@ class SalesforceSink(BatchSink):
             sf_object, self.config.get("action"), self._batched_records
         )
 
-        self._validate_batch_result(
-            results, self.config.get("action"), self._batched_records
-        )
+        if bulk_api_version == 1:
+            self._validate_batch_result_v1(
+                results, self.config.get("action"), self._batched_records
+            )
+        elif bulk_api_version == 2:
+            self._validate_batch_result_v2(
+                results, self.config.get("action"), self._batched_records
+            )
+        else:
+            raise Exception("Invalid Bulk API version")
 
         # Refresh session to avoid timeouts.
         self._new_session()
@@ -170,20 +177,43 @@ class SalesforceSink(BatchSink):
         batched_data,
     ):
         """Handle upsert records different method"""
-        bulk_api_version = self.config("bulk_api_version", 1)
+        bulk_api_version = self.config.get("bulk_api_version", 1)
         if bulk_api_version == 1:
             return self._process_batch_by_action_v1(sf_object, action, batched_data)
         if bulk_api_version == 2:
             return self._process_batch_by_action_v2(sf_object, action, batched_data)
         raise Exception("Invalid Bulk API version")
 
-    def _validate_batch_result(self, results: List[Dict], action, batched_records):
+    def _validate_batch_result_v1(self, results: List[Dict], action, batched_records):
         records_failed = 0
         records_processed = 0
 
         self.logger.info(str(results))
         for i, result in enumerate(results):
             if result.get("success"):
+                records_processed += 1
+            else:
+                records_failed += 1
+                self.logger.error(
+                    f"Failed {action} to to {self.stream_name}. Error: {result.get('errors')}. Record {batched_records[i]}"
+                )
+
+        self.logger.info(
+            f"{action} {records_processed}/{len(results)} to {self.stream_name}."
+        )
+
+        if records_failed > 0 and not self.config.get("allow_failures"):
+            raise SalesforceApiError(
+                f"{records_failed} error(s) in {action} batch commit to {self.stream_name}."
+            )
+
+    def _validate_batch_result_v2(self, results: List[Dict], action, batched_records):
+        records_failed = 0
+        records_processed = 0
+
+        self.logger.info(str(results))
+        for i, result in enumerate(results):
+            if result.get("numberRecordsFailed") == 0:
                 records_processed += 1
             else:
                 records_failed += 1
