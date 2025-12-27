@@ -10,10 +10,10 @@ keywords = [
 license = "Apache 2.0"
 
 [tool.poetry.dependencies]
-python = "<3.12,>=3.7.1"
-requests = "^2.28.1"
+python = "<3.13,>=3.9"
+requests = "^2.32.5"
 singer-sdk = "^0.24.0"
-simple-salesforce = "^1.12.3"
+simple-salesforce = "^1.12.9"
 
 [tool.poetry.dev-dependencies]
 pytest = "^6.2.5"
