@@ -191,11 +191,12 @@ class SalesforceSink(BatchSink):
 
         self.logger.info(str(results))
         for i, result in enumerate(results):
-            if result.get("success"):
-                records_processed += 1
-            else:
-                records_failed += 1
-                self.logger.warning(
+            records_processed += num_processed
+            num_processed = result.get("numberRecordsProcessed")
+            num_failed = result.get("numberRecordsFailed")
+            records_failed += num_failed
+            if num_failed > 0:  # the records may contain sensitive info. Do not spill into production log
+                self.logger.debug(
                     f"Failed {action} to {self.stream_name}. Error: {result.get('errors')}. Record {batched_records[i]}"
                 )
 
@@ -203,17 +204,20 @@ class SalesforceSink(BatchSink):
             f"{action} {records_processed}/{len(results)} to {self.stream_name}."
         )
 
+
         error_rate = 0
         if records_processed + records_failed > 0:
             error_rate = 1.0 * records_failed / (records_processed + records_failed)
-        self.logger.info("METRIC: " + json.dumps(
-                {
-                    "type": "counter",
-                    "metric": "per_batch_error_rate",
-                    "value": error_rate,
-                }
+        if error_rate > 0:
+            self.logger.warning(
+                json.dumps(
+                    {
+                        "type": "counter",
+                        "metric": "per_batch_error_rate",
+                        "value": error_rate,
+                    }
+                )
             )
-        ) 
 
         if records_failed > 0 and not self.config.get("allow_failures"):
             raise SalesforceApiError(
@@ -226,11 +230,12 @@ class SalesforceSink(BatchSink):
 
         self.logger.info(str(results))
         for i, result in enumerate(results):
-            if result.get("numberRecordsFailed") == 0:
-                records_processed += 1
-            else:
-                records_failed += 1
-                self.logger.warning(
+            num_processed = result.get("numberRecordsProcessed")
+            records_processed += num_processed
+            num_failed = result.get("numberRecordsFailed")
+            records_failed += num_failed
+            if num_failed > 0:  # the records may contain sensitive info. Do not spill into production log
+                self.logger.debug(
                     f"Failed {action} to {self.stream_name}. Error: {result.get('errors')}. Record {batched_records[i]}"
                 )
 
@@ -241,14 +246,16 @@ class SalesforceSink(BatchSink):
         error_rate = 0
         if records_processed + records_failed > 0:
             error_rate = 1.0 * records_failed / (records_processed + records_failed)
-        self.logger.info("METRIC: " + json.dumps(
-                {
-                    "type": "counter",
-                    "metric": "per_batch_error_rate",
-                    "value": error_rate,
-                }
+        if error_rate > 0:
+            self.logger.warning(
+                json.dumps(
+                    {
+                        "type": "counter",
+                        "metric": "per_batch_error_rate",
+                        "value": error_rate,
+                    }
+                )
             )
-        )
 
         if records_failed > 0 and not self.config.get("allow_failures"):
             raise SalesforceApiError(
