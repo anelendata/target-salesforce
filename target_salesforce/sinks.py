@@ -189,7 +189,7 @@ class SalesforceSink(BatchSink):
         records_failed = 0
         records_processed = 0
 
-        self.logger.info(str(results))
+        self.logger.info(json.dumps({"results": results}))
         for i, result in enumerate(results):
             records_processed += num_processed
             num_processed = result.get("numberRecordsProcessed")
@@ -228,7 +228,7 @@ class SalesforceSink(BatchSink):
         records_failed = 0
         records_processed = 0
 
-        self.logger.info(str(results))
+        self.logger.info(json.dumps({"results": results}))
         for i, result in enumerate(results):
             num_processed = result.get("numberRecordsProcessed")
             records_processed += num_processed
