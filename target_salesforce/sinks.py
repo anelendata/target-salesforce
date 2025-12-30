@@ -1,5 +1,6 @@
 """Salesforce target sink class, which handles writing streams."""
 
+import json
 from typing import Dict, List, Optional
 from dataclasses import asdict
 
@@ -18,7 +19,7 @@ from target_salesforce.utils.validation import validate_schema_field
 class SalesforceSink(BatchSink):
     """Salesforce target sink class."""
 
-    max_size = 5000
+    max_size = 10000  # TODO: make it configurable
     valid_actions = ["insert", "update", "delete", "hard_delete", "upsert"]
     include_sdc_metadata_properties = False
 
@@ -194,13 +195,25 @@ class SalesforceSink(BatchSink):
                 records_processed += 1
             else:
                 records_failed += 1
-                self.logger.error(
-                    f"Failed {action} to to {self.stream_name}. Error: {result.get('errors')}. Record {batched_records[i]}"
+                self.logger.warning(
+                    f"Failed {action} to {self.stream_name}. Error: {result.get('errors')}. Record {batched_records[i]}"
                 )
 
         self.logger.info(
             f"{action} {records_processed}/{len(results)} to {self.stream_name}."
         )
+
+        error_rate = 0
+        if records_processed + records_failed > 0:
+            error_rate = 1.0 * records_failed / (records_processed + records_failed)
+        self.logger.info("METRIC: " + json.dumps(
+                {
+                    "type": "counter",
+                    "metric": "per_batch_error_rate",
+                    "value": error_rate,
+                }
+            )
+        ) 
 
         if records_failed > 0 and not self.config.get("allow_failures"):
             raise SalesforceApiError(
@@ -217,12 +230,24 @@ class SalesforceSink(BatchSink):
                 records_processed += 1
             else:
                 records_failed += 1
-                self.logger.error(
-                    f"Failed {action} to to {self.stream_name}. Error: {result.get('errors')}. Record {batched_records[i]}"
+                self.logger.warning(
+                    f"Failed {action} to {self.stream_name}. Error: {result.get('errors')}. Record {batched_records[i]}"
                 )
 
         self.logger.info(
             f"{action} {records_processed}/{len(results)} to {self.stream_name}."
+        )
+
+        error_rate = 0
+        if records_processed + records_failed > 0:
+            error_rate = 1.0 * records_failed / (records_processed + records_failed)
+        self.logger.info("METRIC: " + json.dumps(
+                {
+                    "type": "counter",
+                    "metric": "per_batch_error_rate",
+                    "value": error_rate,
+                }
+            )
         )
 
         if records_failed > 0 and not self.config.get("allow_failures"):
