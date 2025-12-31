@@ -1,6 +1,9 @@
 """Salesforce target sink class, which handles writing streams."""
 
+import csv
 import json
+
+from io import StringIO
 from typing import Dict, List, Optional
 from dataclasses import asdict
 
@@ -45,7 +48,7 @@ class SalesforceSink(BatchSink):
 
     @property
     def mdapi(self):
-        return self.sf_client().mdapi
+        return self.sf_client.mdapi
 
     @property
     def object_fields(self) -> Dict[str, ObjectField]:
@@ -189,35 +192,18 @@ class SalesforceSink(BatchSink):
         records_failed = 0
         records_processed = 0
 
-        self.logger.info(json.dumps({"results": results}))
         for i, result in enumerate(results):
-            records_processed += num_processed
-            num_processed = result.get("numberRecordsProcessed")
-            num_failed = result.get("numberRecordsFailed")
-            records_failed += num_failed
-            if num_failed > 0:  # the records may contain sensitive info. Do not spill into production log
-                self.logger.debug(
-                    f"Failed {action} to {self.stream_name}. Error: {result.get('errors')}. Record {batched_records[i]}"
+            if result.get("success"):
+                records_processed += 1
+            else:
+                records_failed += 1
+                self.logger.error(
+                    f"Failed {action} to to {self.stream_name}. Error: {result.get('errors')}. Record {batched_records[i]}"
                 )
 
         self.logger.info(
             f"{action} {records_processed}/{len(results)} to {self.stream_name}."
         )
-
-
-        error_rate = 0
-        if records_processed + records_failed > 0:
-            error_rate = 1.0 * records_failed / (records_processed + records_failed)
-        if error_rate > 0:
-            self.logger.warning(
-                json.dumps(
-                    {
-                        "type": "counter",
-                        "metric": "per_batch_error_rate",
-                        "value": error_rate,
-                    }
-                )
-            )
 
         if records_failed > 0 and not self.config.get("allow_failures"):
             raise SalesforceApiError(
@@ -227,6 +213,7 @@ class SalesforceSink(BatchSink):
     def _validate_batch_result_v2(self, results: List[Dict], action, batched_records):
         records_failed = 0
         records_processed = 0
+        failed_records = []
 
         self.logger.info(json.dumps({"results": results}))
         for i, result in enumerate(results):
@@ -238,6 +225,22 @@ class SalesforceSink(BatchSink):
                 self.logger.debug(
                     f"Failed {action} to {self.stream_name}. Error: {result.get('errors')}. Record {batched_records[i]}"
                 )
+
+                # Get failed records
+                job_id = result.get("job_id")
+                # services/data/vXX.X/jobs/ingest/jobID/failedResults/
+                path = f"jobs/ingest/{job_id}/failedResults/"
+                # failed_results = self.sf_client.restful(path)
+                url = self.sf_client.base_url + path
+                failed_results = self.sf_client._call_salesforce("GET", url, name=path)
+
+                csv_string = failed_results.content.decode("utf-8")
+                self.logger.debug(csv_string)
+                # Convert string to file-like object
+                f = StringIO(csv_string)
+                # Read CSV data
+                reader = csv.DictReader(f)
+                failed_records = failed_records + [row for row in reader]
 
         self.logger.info(
             f"{action} {records_processed}/{len(results)} to {self.stream_name}."
@@ -256,6 +259,10 @@ class SalesforceSink(BatchSink):
                     }
                 )
             )
+            if self.config.get("stdout_failed_records", False):
+                for d in failed_records:
+                    r = {"currently_syncing": self.stream_name, "failed_record": d}
+                    print(json.dumps(r))
 
         if records_failed > 0 and not self.config.get("allow_failures"):
             raise SalesforceApiError(
